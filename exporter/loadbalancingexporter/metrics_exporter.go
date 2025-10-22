@@ -129,7 +129,6 @@ func (e *metricExporterImp) ConsumeMetrics(ctx context.Context, md pmetric.Metri
 
 		expMetrics, ok := metricsByExporter[exp]
 		if !ok {
-			exp.consumeWG.Add(1)
 			expMetrics = pmetric.NewMetrics()
 			metricsByExporter[exp] = expMetrics
 			exporterEndpoints[exp] = endpoint
@@ -140,19 +139,24 @@ func (e *metricExporterImp) ConsumeMetrics(ctx context.Context, md pmetric.Metri
 
 	var errs error
 	for exp, mds := range metricsByExporter {
-		start := time.Now()
-		err := exp.ConsumeMetrics(ctx, mds)
-		duration := time.Since(start)
+		err := e.loadBalancer.consumeWithRetry([]byte(exporterEndpoints[exp]), exp, exporterEndpoints[exp], func(currentExp *wrappedExporter, currentEndpoint string) error {
+			currentExp.consumeWG.Add(1)
+			start := time.Now()
+			err := currentExp.ConsumeMetrics(ctx, mds)
+			duration := time.Since(start)
+			currentExp.consumeWG.Done()
+			e.telemetry.LoadbalancerBackendLatency.Record(ctx, duration.Milliseconds(), metric.WithAttributeSet(currentExp.endpointAttr))
 
-		exp.consumeWG.Done()
+			if err == nil {
+				e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(currentExp.successAttr))
+				return nil
+			}
+
+			e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(currentExp.failureAttr))
+			e.logger.Debug("failed to export metrics", zap.String("endpoint", currentEndpoint), zap.Error(err))
+			return err
+		})
 		errs = multierr.Append(errs, err)
-		e.telemetry.LoadbalancerBackendLatency.Record(ctx, duration.Milliseconds(), metric.WithAttributeSet(exp.endpointAttr))
-		if err == nil {
-			e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(exp.successAttr))
-		} else {
-			e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(exp.failureAttr))
-			e.logger.Debug("failed to export metrics", zap.Error(err))
-		}
 	}
 
 	return errs
