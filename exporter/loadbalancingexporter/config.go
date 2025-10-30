@@ -50,6 +50,9 @@ type Config struct {
 	// Supports all attributes available (both resource and span), as well as the pseudo attributes "span.kind" and
 	// "span.name".
 	RoutingAttributes []string `mapstructure:"routing_attributes"`
+
+	// Failover defines the configuration for endpoint failover behavior
+	Failover FailoverSettings `mapstructure:"failover"`
 }
 
 // Protocol holds the individual protocol-specific settings. Only OTLP is supported at the moment.
@@ -92,6 +95,16 @@ type K8sSvcResolver struct {
 	Ports           []int32       `mapstructure:"ports"`
 	Timeout         time.Duration `mapstructure:"timeout"`
 	ReturnHostnames bool          `mapstructure:"return_hostnames"`
+	// prevent unkeyed literal initialization
+	_ struct{}
+}
+
+// FailoverSettings defines the configuration for endpoint failover behavior
+type FailoverSettings struct {
+	// QuarantineDuration specifies how long an unhealthy endpoint should be excluded from load balancing
+	// after a failure. After this duration, the endpoint will be eligible for retry.
+	// Default: 30s
+	QuarantineDuration time.Duration `mapstructure:"quarantine_duration"`
 	// prevent unkeyed literal initialization
 	_ struct{}
 }
